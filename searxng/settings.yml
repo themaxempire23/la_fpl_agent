@@ -1,0 +1,19 @@
+use_default_settings: true
+outgoing:
+  request_timeout: 15.0
+  max_request_timeout: 30.0
+server:
+  secret_key: "local-fpl-search-instance-only"
+  limiter: false
+  image_proxy: false
+search:
+  formats:
+    - html
+    - json
+engines:
+  - name: bing
+    disabled: false
+  - name: yahoo
+    disabled: false
+  - name: startpage
+    disabled: false

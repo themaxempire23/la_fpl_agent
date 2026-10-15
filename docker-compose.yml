@@ -1,0 +1,127 @@
+services:
+  # PostgreSQL Database
+  postgres:
+    image: postgres:17-alpine
+    container_name: fpl-postgres
+    restart: unless-stopped
+    ports:
+      - "127.0.0.1:5432:5432"
+    environment:
+      POSTGRES_USER: postgres
+      POSTGRES_PASSWORD: postgres
+      POSTGRES_DB: fpl_db
+    volumes:
+      - postgres17_data:/var/lib/postgresql/data
+      - ./fpl-db-setup.sql:/docker-entrypoint-initdb.d/init.sql
+    networks:
+      - fpl-net
+    healthcheck:
+      test: ["CMD-SHELL", "pg_isready -U postgres"]
+      interval: 10s
+      timeout: 5s
+      retries: 5
+
+  # n8n Workflow Engine
+  n8n:
+    image: n8nio/n8n:latest
+    container_name: fpl-n8n
+    restart: unless-stopped
+    ports:
+      - "127.0.0.1:5678:5678"
+    environment: &n8n-environment
+      - DB_TYPE=postgresdb
+      - DB_POSTGRESDB_HOST=postgres
+      - DB_POSTGRESDB_PORT=5432
+      - DB_POSTGRESDB_DATABASE=fpl_db
+      - DB_POSTGRESDB_USER=postgres
+      - DB_POSTGRESDB_PASSWORD=postgres
+      - N8N_HOST=localhost
+      - N8N_PORT=5678
+      - NODE_ENV=production
+      - N8N_WEBHOOK_URL=http://localhost:5678/
+      - GENERIC_TIMEZONE=Africa/Windhoek
+      - N8N_BLOCK_ENV_ACCESS_IN_NODE=false
+      - FPL_TEAM_ID=${FPL_TEAM_ID:-0}
+      - OLLAMA_MODEL=${OLLAMA_MODEL:-qwen3:8b}
+    volumes: &n8n-volumes
+      - n8n_data:/home/node/.n8n
+      - ./fpl-n8n-workflow.json:/workflows/fpl-n8n-workflow.json:ro
+      - ./n8n-credentials.json:/workflows/n8n-credentials.json:ro
+    networks:
+      - fpl-net
+    depends_on:
+      postgres:
+        condition: service_healthy
+    healthcheck:
+      test: ["CMD", "node", "-e", "fetch('http://127.0.0.1:5678/healthz').then(r=>process.exit(r.ok?0:1)).catch(()=>process.exit(1))"]
+      interval: 30s
+      timeout: 10s
+      retries: 5
+
+  # Optional one-shot execution; no HTTP editor or HTTP health check runs here.
+  analysis:
+    image: n8nio/n8n:latest
+    container_name: fpl-analysis
+    profiles: ["manual"]
+    restart: "no"
+    command: ["execute", "--id=fpl-agent-main"]
+    environment: *n8n-environment
+    volumes: *n8n-volumes
+    networks:
+      - fpl-net
+    healthcheck:
+      disable: true
+    depends_on:
+      postgres:
+        condition: service_healthy
+      ollama:
+        condition: service_healthy
+      search:
+        condition: service_started
+
+  ollama:
+    image: ollama/ollama:latest
+    container_name: fpl-ollama
+    restart: unless-stopped
+    ports:
+      - "127.0.0.1:11434:11434"
+    volumes:
+      - ollama_data:/root/.ollama
+    networks:
+      - fpl-net
+    healthcheck:
+      test: ["CMD", "ollama", "list"]
+      interval: 15s
+      timeout: 10s
+      retries: 10
+
+  ollama-init:
+    image: ollama/ollama:latest
+    entrypoint: ["/bin/sh", "-c"]
+    command: ['ollama show "$${OLLAMA_MODEL}" >/dev/null 2>&1 || ollama pull "$${OLLAMA_MODEL}"']
+    environment:
+      OLLAMA_HOST: http://ollama:11434
+      OLLAMA_MODEL: ${OLLAMA_MODEL:-qwen3:8b}
+    depends_on:
+      ollama:
+        condition: service_healthy
+    networks:
+      - fpl-net
+
+  search:
+    image: searxng/searxng:latest
+    container_name: fpl-search
+    restart: unless-stopped
+    volumes:
+      - ./searxng/settings.yml:/etc/searxng/settings.yml:ro
+    networks:
+      - fpl-net
+
+volumes:
+  postgres17_data:
+  n8n_data:
+  ollama_data:
+
+networks:
+  fpl-net:
+    driver: bridge
